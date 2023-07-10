@@ -1,0 +1,12 @@
+[package]
+name = "hexadeck"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+cortex-m = "0.7.7"
+cortex-m-rt = "0.7.3"
+embedded-hal = "0.2.7"
+fugit = "0.3.6"
+panic-halt = "0.2.0"
+rp-pico = "0.7.0"
