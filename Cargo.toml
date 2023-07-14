@@ -2,11 +2,19 @@
 name = "hexadeck"
 version = "0.1.0"
 edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/SomewhereOutInSpace/hexadeck/"
 
 [dependencies]
+# HAL
+embedded-hal = "0.2.7"
+rp2040-hal = { version = "0.8.2", features = ["rtic-monotonic"] }
+rp-pico = "0.7.0"
+
+# Processor access
 cortex-m = "0.7.7"
 cortex-m-rt = "0.7.3"
-embedded-hal = "0.2.7"
+
+# Utility
 fugit = "0.3.6"
 panic-halt = "0.2.0"
-rp-pico = "0.7.0"

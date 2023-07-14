@@ -126,6 +126,7 @@ dependencies = [
  "fugit",
  "panic-halt",
  "rp-pico",
+ "rp2040-hal",
 ]
 
 [[package]]
@@ -260,6 +261,7 @@ dependencies = [
  "rand_core",
  "rp2040-hal-macros",
  "rp2040-pac",
+ "rtic-monotonic",
  "usb-device",
  "vcell",
  "void",
@@ -287,6 +289,12 @@ dependencies = [
  "cortex-m-rt",
  "vcell",
 ]
+
+[[package]]
+name = "rtic-monotonic"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb8b0b822d1a366470b9cea83a1d4e788392db763539dc4ba022bcc787fece82"
 
 [[package]]
 name = "rustc_version"

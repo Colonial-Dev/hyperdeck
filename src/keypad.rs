@@ -1,22 +1,18 @@
 use core::convert::Infallible;
 
 use embedded_hal::digital::v2::OutputPin;
-use embedded_hal::prelude::_embedded_hal_blocking_spi_Write;
-use embedded_hal::prelude::_embedded_hal_blocking_i2c_Read;
-use embedded_hal::prelude::_embedded_hal_blocking_i2c_Write;
+use embedded_hal::prelude::*;
 
-use rp_pico::hal::{Spi, spi::Enabled, I2C, i2c::Error};
-use rp_pico::pac::{SPI0, I2C0};
-use rp_pico::hal::gpio::{
-    bank0::*, Pin,
-    FunctionI2C, 
-    Output, PushPull
+use rp_pico::hal::{
+    i2c::Error,
+    gpio::{bank0::*, FunctionI2C, Output, Pin, PushPull},
+    spi::Enabled,
+    timer::Instant,
 };
+use rp_pico::hal::{Spi, I2C};
+use rp_pico::pac::{I2C0, SPI0};
 
-const KEYPAD_ADDR: u8 = 0x20;
-const START_FRAME: [u8; 4] = [0x00, 0x00, 0x00, 0x00];
-const END_FRAME:   [u8; 4] = [0xFF, 0xFF, 0xFF, 0xFF];
-
+use super::{Duration64, now};
 
 type KeyI2c = I2C<I2C0, (Pin<Gpio4, FunctionI2C>, Pin<Gpio5, FunctionI2C>)>;
 type LedSpi = Spi<Enabled, SPI0, 8>;
@@ -24,61 +20,172 @@ type CS = Pin<Gpio17, Output<PushPull>>;
 
 pub struct Keypad {
     pub keys: [Key; 16],
-    pub i2c: KeyI2c,
-    pub spi: LedSpi,
-    pub cs: CS
+    brightness: u8,
+    i2c: KeyI2c,
+    spi: LedSpi,
+    cs: CS,
 }
 
 impl Keypad {
-    pub fn set_leds(&mut self) -> Result<(), Infallible> {
+    const NUM_KEYS: usize = 16;
+    const START_FRAME: [u8; 4] = [0x00, 0x00, 0x00, 0x00];
+    const END_FRAME: [u8; 4] = [0xFF, 0xFF, 0xFF, 0xFF];
+    const KEYPAD_ADDR: u8 = 0x20;
+}
+
+impl Keypad {
+    pub fn new(i2c: KeyI2c, spi: LedSpi, cs: CS) -> Self {
+        Self {
+            keys: core::array::from_fn(|_| Key::new()),
+            brightness: u8::MAX,
+            i2c,
+            spi,
+            cs,
+        }
+    }
+
+    pub fn update(&mut self) -> impl Iterator<Item = (u8, KeyEvent)> {
+        // Yes, this is *technically* out of order, but updates happen
+        // so fast that it doesn't really matter.
+        self.update_leds().unwrap();
+        self.update_state().unwrap()
+    }
+
+    pub fn set_brightness(&mut self, brightness: f32) {
+        let brightness = brightness.clamp(0.0, 1.0);
+        // Map a percentage value (between 0.0 and 1.0) to a u8 between 224 and 255 
+        // (the brightness range accepted by the keypad LED protocol)
+        self.brightness = 0b11100000 | (brightness * 0b11111 as f32) as u8;
+    }
+
+    fn update_leds(&mut self) -> Result<(), Infallible> {
+        // Start SPI transaction
         self.cs.set_low()?;
 
-        self.spi.write(&START_FRAME)?;
+        // https://cpldcpu.wordpress.com/2014/11/30/understanding-the-apa102-superled/
+        // Start frame is 32 zero bits
+        self.spi.write(&Self::START_FRAME)?;
 
+        // 32 bit LED frame, one for each LED
+        // <0xE0 + brightness> (30 brightness levels)
+        // <B byte>
+        // <G byte>
+        // <R byte>
         for key in &self.keys {
-            self.spi.write(&[0xFF])?;
-
-            if key.pressed {
-                self.spi.write(&[key.pressed_color.b])?;
-                self.spi.write(&[key.pressed_color.g])?;
-                self.spi.write(&[key.pressed_color.r])?;
-            } else {
-                self.spi.write(&[key.default_color.b])?;
-                self.spi.write(&[key.default_color.g])?;
-                self.spi.write(&[key.default_color.r])?;
-            }
+            self.spi.write(&[self.brightness])?;
+            self.spi.write(&key.color().as_bgr())?;
         }
-        
-        self.spi.write(&END_FRAME)?;
 
+        // End frame is 32 one bits
+        // Not technically protocol-compliant (see above link)
+        // but fine for this application since the number of LEDs is constant
+        self.spi.write(&Self::END_FRAME)?;
+
+        // End SPI transaction
         self.cs.set_high()?;
 
         Ok(())
     }
 
-    pub fn update(&mut self) -> Result<(), Error> {
+    fn update_state(&mut self) -> Result<impl Iterator<Item =(u8, KeyEvent)>, Error> {
         let mut buffer = [0_u8; 2];
-        
-        self.i2c.write(KEYPAD_ADDR, &[0x0])?;
-        self.i2c.read(KEYPAD_ADDR, &mut buffer)?;
 
+        // Write zero constant to I2C bus
+        // Unsure why exactly this is needed... but it is
+        self.i2c.write(Self::KEYPAD_ADDR, &[0x0])?;
+
+        // Read keypress states from the I2C bus into buffer
+        self.i2c.read(Self::KEYPAD_ADDR, &mut buffer)?;
+
+        // Bithacking to turn our two state bytes into a single u16,
+        // where each bit represents the state of a key
         let state = !(buffer[0] as u16 | (buffer[1] as u16) << 8);
 
-        for i in 0..16 {
-            let pressed = state & (1 << i);
+        let mut events = [None; 16];
 
-            if pressed != 0 {
-                self.keys[i].pressed = true;
-            } else {
-                self.keys[i].pressed = false;
-            }
+        // Update each key
+        #[allow(clippy::needless_range_loop)]
+        for i in 0..Self::NUM_KEYS {
+            // Matches macro is ugly and unreadable
+            #[allow(clippy::match_like_matches_macro)]
+            let pressed = match state & (1 << i) {
+                0 => false,
+                _ => true
+            };
+
+            events[i] = self.keys[i].update(pressed);
         }
 
-        Ok(())
+        Ok(events
+            .into_iter()
+            .enumerate()
+            .filter_map(|(i, event)| {
+                event.map(|e| (i as u8, e))
+            })
+        )
+    }
+}
+
+pub struct Key {
+    pub default_color: Color,
+    pub pressed_color: Color,
+    pub last_pressed: Instant,
+    pub pressed: bool,
+    pub held: bool,
+}
+
+impl Key {
+    const HOLD_TIME: Duration64 = Duration64::millis(750);
+}
+
+impl Key {
+    pub fn new() -> Self {
+        Self {
+            default_color: Color::new(255, 255, 255),
+            pressed_color: Color::new(0, 255, 0),
+            last_pressed: now(),
+            pressed: false,
+            held: false
+        }
+    }
+
+    pub fn update(&mut self, pressed: bool) -> Option<KeyEvent> {
+        let new_press = pressed && !self.pressed;
+        let old_press = pressed && self.pressed;
+        let elapsed = now() - self.last_pressed;
+
+        if new_press {
+            self.last_pressed = now();
+            self.pressed = true;
+
+            Some(KeyEvent::Pressed)
+        } else if old_press && elapsed >= Self::HOLD_TIME {
+            self.held = true;
+
+            Some(KeyEvent::Held)
+        } else {
+            self.pressed = pressed;
+            self.held = pressed;
+            
+            None
+        }
+    }
+
+    pub fn color(&self) -> Color {
+        match self.pressed {
+            true => self.pressed_color,
+            false => self.default_color,
+        }
     }
 }
 
 #[derive(Clone, Copy)]
+pub enum KeyEvent {
+    Pressed,
+    Held
+}
+
+#[derive(Clone, Copy, Default)]
 pub struct Color {
     pub r: u8,
     pub g: u8,
@@ -86,21 +193,11 @@ pub struct Color {
 }
 
 impl Color {
+    pub fn new(r: u8, g: u8, b: u8) -> Self {
+        Self { r, g, b }
+    }
 
-}
-
-pub struct Key {
-    pub default_color: Color,
-    pub pressed_color: Color,
-    pub pressed: bool,
-}
-
-impl Default for Key {
-    fn default() -> Self {
-        Key {
-            default_color: Color {r: 255, g: 255, b: 255},
-            pressed_color: Color {r: 0, g: 255, b: 0},
-            pressed: false
-        }
+    pub fn as_bgr(&self) -> [u8; 3] {
+        [self.b, self.g, self.r]
     }
 }
