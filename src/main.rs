@@ -2,22 +2,33 @@
 #![no_main]
 
 mod display;
-mod hid;
 mod keypad;
+mod usb;
 
 use embedded_hal::spi::MODE_0;
 use fugit::RateExtU32;
-use panic_halt as _;
 
 use rp_pico::hal::gpio::FunctionSpi as SPI;
 use rp_pico::hal::timer::{Instant, Timer};
 use rp_pico::hal::{self, pac, Clock, Spi, I2C};
+use rp_pico::hal::usb::UsbBus;
+
+use usb_device::class_prelude::UsbBusAllocator;
 
 use keypad::Keypad;
 
 static mut TIMER: Option<Timer> = None;
 
 type Duration64 = fugit::Duration<u64, 1, 100000>;
+
+/// Custom panic handler. Resets the Pico into BOOTSEL (flashing) mode.
+/// Useful for distinguishing between a hang/deadlock and panic/crash.
+#[inline(never)]
+#[panic_handler]
+fn panic(_: &core::panic::PanicInfo) -> ! {
+    rp2040_hal::rom_data::reset_to_usb_boot(0, 0);
+    loop {}
+}
 
 #[rp_pico::entry]
 fn main() -> ! {
@@ -44,10 +55,21 @@ fn main() -> ! {
                 rp2040_hal::rom_data::reset_to_usb_boot(0, 0);
             }
             if id == 15 && matches!(event, keypad::KeyEvent::Pressed) {
-                keypad.set_brightness(0.1);
+                let result = usb::push_keyboard(usbd_hid::descriptor::KeyboardReport {
+                    modifier: 0b00000101,
+                    reserved: 0,
+                    leds: 0,
+                    keycodes: [0x17, 0x0, 0x0, 0x0, 0x0, 0x0]
+                }); 
             }
-            if id == 14 && matches!(event, keypad::KeyEvent::Pressed) {
-                keypad.set_brightness(1.0);
+
+            if matches!(event, keypad::KeyEvent::Released) {
+                let _ = usb::push_keyboard(usbd_hid::descriptor::KeyboardReport {
+                    modifier: 0,
+                    reserved: 0,
+                    leds: 0,
+                    keycodes: [0x0, 0x0, 0x0, 0x0, 0x0, 0x0]
+                }); 
             }
         }
     }
@@ -86,6 +108,16 @@ fn hardware_init() -> Keypad {
     unsafe {
         TIMER = Some(timer);
     }
+
+    let bus_allocator = UsbBusAllocator::new(UsbBus::new(
+        pac.USBCTRL_REGS,
+        pac.USBCTRL_DPRAM,
+        clocks.usb_clock,
+        true,
+        &mut pac.RESETS,
+    ));
+
+    usb::usb_init(bus_allocator);
 
     // I2C for keypad keys
     let i2c = I2C::i2c0(

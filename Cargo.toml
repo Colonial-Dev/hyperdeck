@@ -10,11 +10,15 @@ repository = "https://github.com/SomewhereOutInSpace/hexadeck/"
 embedded-hal = "0.2.7"
 rp2040-hal = { version = "0.8.2", features = ["rtic-monotonic"] }
 rp-pico = "0.7.0"
+critical-section = "1.1.1"
 
 # Processor access
 cortex-m = "0.7.7"
 cortex-m-rt = "0.7.3"
 
+# USB HID
+usb-device = "0.2.9"
+usbd-hid = "0.6.1"
+
 # Utility
 fugit = "0.3.6"
-panic-halt = "0.2.0"

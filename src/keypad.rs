@@ -51,6 +51,15 @@ impl Keypad {
         self.update_state().unwrap()
     }
 
+    pub fn set_colors(&mut self, colors: [(Color, Color); 16]) {
+        // I need to index into both, actually
+        #[allow(clippy::needless_range_loop)]
+        for i in 0..Self::NUM_KEYS {
+            self.keys[i].default_color = colors[i].0;
+            self.keys[i].pressed_color = colors[i].1;
+        }
+    }
+
     pub fn set_brightness(&mut self, brightness: f32) {
         let brightness = brightness.clamp(0.0, 1.0);
         // Map a percentage value (between 0.0 and 1.0) to a u8 between 224 and 255 
@@ -101,9 +110,12 @@ impl Keypad {
         // where each bit represents the state of a key
         let state = !(buffer[0] as u16 | (buffer[1] as u16) << 8);
 
+        // TODO Log Instant of last press (in order to support timed sleep mode)
+
         let mut events = [None; 16];
 
         // Update each key
+        // Again, I need to index into both collections
         #[allow(clippy::needless_range_loop)]
         for i in 0..Self::NUM_KEYS {
             // Matches macro is ugly and unreadable
@@ -150,23 +162,28 @@ impl Key {
     }
 
     pub fn update(&mut self, pressed: bool) -> Option<KeyEvent> {
-        let new_press = pressed && !self.pressed;
-        let old_press = pressed && self.pressed;
-        let elapsed = now() - self.last_pressed;
-
-        if new_press {
+        // New press
+        if pressed && !self.pressed {
             self.last_pressed = now();
             self.pressed = true;
 
             Some(KeyEvent::Pressed)
-        } else if old_press && elapsed >= Self::HOLD_TIME {
+        } 
+        // Old press (check to trigger hold event)
+        else if (pressed && self.pressed) && (now() - self.last_pressed) >= Self::HOLD_TIME {
             self.held = true;
 
             Some(KeyEvent::Held)
-        } else {
-            self.pressed = pressed;
-            self.held = pressed;
+        } 
+        // Released
+        else if !pressed && self.pressed {
+            self.pressed = false;
+            self.held = false;
             
+            Some(KeyEvent::Released)
+        } 
+        // No event of note
+        else {            
             None
         }
     }
@@ -182,7 +199,8 @@ impl Key {
 #[derive(Clone, Copy)]
 pub enum KeyEvent {
     Pressed,
-    Held
+    Held,
+    Released
 }
 
 #[derive(Clone, Copy, Default)]
