@@ -153,7 +153,7 @@ impl Key {
 impl Key {
     pub fn new() -> Self {
         Self {
-            default_color: Color::new(255, 255, 255),
+            default_color: Color::new(16, 16, 16),
             pressed_color: Color::new(0, 255, 0),
             last_pressed: now(),
             pressed: false,

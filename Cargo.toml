@@ -8,7 +8,7 @@ repository = "https://github.com/SomewhereOutInSpace/hexadeck/"
 [dependencies]
 # HAL
 embedded-hal = "0.2.7"
-rp2040-hal = { version = "0.8.2", features = ["rtic-monotonic"] }
+rp2040-hal = "0.8.2"
 rp-pico = "0.7.0"
 critical-section = "1.1.1"
 
@@ -20,5 +20,11 @@ cortex-m-rt = "0.7.3"
 usb-device = "0.2.9"
 usbd-hid = "0.6.1"
 
+# Display
+mipidsi = "0.7.1"
+display-interface-spi = "0.4.1"
+embedded-graphics = "0.8.0"
+
 # Utility
 fugit = "0.3.6"
+heapless = "0.7.16"

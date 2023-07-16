@@ -74,20 +74,20 @@ pub fn push_keyboard(report: KeyboardReport) -> Result<usize, UsbError> {
 #[interrupt]
 unsafe fn USBCTRL_IRQ() {
     // Safety: taking a mutable reference to these *should* be okay,
-    // as the interrupt preempts the rest of the program and we aren't using
-    // the RP2040's second core.
+    // as the interrupt preempts the rest of the program (with the exception
+    // of the display controller on core1, which can't touch these due to privacy rules.)
     let usb_dev = USB_DEVICE.as_mut().unwrap();
 
     let hid_keyboard = HID_KEYBOARD.as_mut().unwrap();
     let hid_sysctl = HID_SYSCTL.as_mut().unwrap();
     let hid_media = HID_MEDIA.as_mut().unwrap();
 
+    usb_dev.poll(&mut [hid_keyboard, hid_sysctl, hid_media]);
+
     // This is needed for reasons only known to the wizards
-    // at the USB-IF
+    // at the USB-IF (it has something to do with caps lock LEDs?)
     let mut throwaway_buf = [0; 64];
     let _ = hid_keyboard.pull_raw_output(&mut throwaway_buf);
     let _ = hid_sysctl.pull_raw_output(&mut throwaway_buf);
     let _ = hid_media.pull_raw_output(&mut throwaway_buf);
-
-    usb_dev.poll(&mut [hid_keyboard, hid_sysctl, hid_media]);
 }

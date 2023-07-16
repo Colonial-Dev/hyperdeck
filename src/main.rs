@@ -5,7 +5,10 @@ mod display;
 mod keypad;
 mod usb;
 
-use embedded_hal::spi::MODE_0;
+use display_interface_spi::SPIInterface;
+
+use embedded_hal::digital::v2::OutputPin;
+use embedded_hal::spi::{MODE_0, MODE_3};
 use fugit::RateExtU32;
 
 use rp_pico::hal::gpio::FunctionSpi as SPI;
@@ -27,13 +30,16 @@ type Duration64 = fugit::Duration<u64, 1, 100000>;
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
     rp2040_hal::rom_data::reset_to_usb_boot(0, 0);
-    loop {}
+
+    loop {
+        // The previous line hard resets the controller, so this is unreachable.
+    }
 }
 
 #[rp_pico::entry]
 fn main() -> ! {
     let mut keypad = hardware_init();
-
+    keypad.set_brightness(0.1);
     loop {
         for (id, event) in keypad.update() {
             if id == 0 && matches!(event, keypad::KeyEvent::Held) {
@@ -61,6 +67,10 @@ fn main() -> ! {
                     leds: 0,
                     keycodes: [0x17, 0x0, 0x0, 0x0, 0x0, 0x0]
                 }); 
+
+                if matches!(result, Err(usb_device::UsbError::WouldBlock)) {
+                    keypad.keys[0].default_color = keypad::Color::new(0, 255, 0);
+                }
             }
 
             if matches!(event, keypad::KeyEvent::Released) {
@@ -116,7 +126,7 @@ fn hardware_init() -> Keypad {
         true,
         &mut pac.RESETS,
     ));
-
+    
     usb::usb_init(bus_allocator);
 
     // I2C for keypad keys
@@ -141,7 +151,112 @@ fn hardware_init() -> Keypad {
         &MODE_0,
     );
 
-    Keypad::new(i2c, spi, cs)
+    let keypad = Keypad::new(i2c, spi, cs);
+
+    // Display
+    let mut bl = pins.gpio22.into_push_pull_output();
+    let mut rst = pins.gpio28.into_push_pull_output();
+    
+    let dc = pins.gpio16.into_push_pull_output();
+    let cs = pins.gpio21.into_push_pull_output();
+
+    let _ = pins.gpio26.into_mode::<SPI>();
+    let _ = pins.gpio27.into_mode::<SPI>();
+
+    let core = pac::CorePeripherals::take().unwrap();
+    let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
+
+    bl.set_low().unwrap();
+    rst.set_high().unwrap();
+
+    let spi = Spi::<_, _, 8>::new(pac.SPI1).init(
+        &mut pac.RESETS,
+        clocks.peripheral_clock.freq(),
+        64_000_000.Hz(),
+        &MODE_3,
+    );
+
+    let interface = SPIInterface::new(spi, dc, cs);
+
+    let mut display = mipidsi::Builder::st7789_pico1(interface)
+        .with_display_size(135, 240)
+        .with_orientation(mipidsi::Orientation::Landscape(true))
+        .init(&mut delay, Some(rst))
+        .unwrap();
+
+    display.clear(embedded_graphics::pixelcolor::Rgb565::BLACK).unwrap();
+
+    const Y_MAX: i32 = 134;
+    const X_MAX: i32 = 239;
+
+    const CIRCLE_WIDTH: u32 = 60;
+    const CIRCLE_RADIUS: i32 = 30;
+
+    use embedded_graphics::{
+        geometry::AnchorPoint,
+        mono_font::{ascii::FONT_9X15, MonoTextStyleBuilder},
+        pixelcolor::Rgb565,
+        prelude::{DrawTarget, RgbColor},
+        text::{Alignment, Baseline, Text, TextStyleBuilder},
+    };
+
+    use embedded_graphics::prelude::*;
+    use embedded_graphics::primitives::*;
+
+    let circle_origin_red = Circle::new(
+        Point::new(0 - CIRCLE_RADIUS, 0 - CIRCLE_RADIUS),
+        CIRCLE_WIDTH,
+    )
+    .into_styled(PrimitiveStyle::with_fill(Rgb565::RED));
+
+    let circle_xmax_blue = Circle::new(
+        Point::new(X_MAX - CIRCLE_RADIUS, 0 - CIRCLE_RADIUS),
+        CIRCLE_WIDTH,
+    )
+    .into_styled(PrimitiveStyle::with_fill(Rgb565::BLUE));
+
+    let circle_ymax_green = Circle::new(
+        Point::new(0 - CIRCLE_RADIUS, Y_MAX - CIRCLE_RADIUS),
+        CIRCLE_WIDTH,
+    )
+    .into_styled(PrimitiveStyle::with_fill(Rgb565::GREEN));
+
+    let circle_xmax_ymax_yellow = Circle::new(
+        Point::new(X_MAX - CIRCLE_RADIUS, Y_MAX - CIRCLE_RADIUS),
+        CIRCLE_WIDTH,
+    )
+    .into_styled(PrimitiveStyle::with_fill(Rgb565::YELLOW));
+
+    circle_origin_red.draw(&mut display).unwrap();
+    circle_xmax_blue.draw(&mut display).unwrap();
+    circle_ymax_green.draw(&mut display).unwrap();
+    circle_xmax_ymax_yellow.draw(&mut display).unwrap();
+
+    let center_aligned = TextStyleBuilder::new()
+        .alignment(Alignment::Center)
+        .baseline(Baseline::Middle)
+        .build();
+
+    let bb = display.bounding_box().offset(-20);
+
+    let text_style = MonoTextStyleBuilder::new()
+    .font(&embedded_graphics::mono_font::ascii::FONT_10X20)
+    .text_color(Rgb565::WHITE)
+    .build();
+
+    Text::with_text_style("HEXADECK", bb.anchor_point(AnchorPoint::TopCenter), text_style, center_aligned)
+        .draw(&mut display)
+        .unwrap();
+
+    Text::with_text_style("HEXADECK", bb.anchor_point(AnchorPoint::Center), text_style, center_aligned)
+        .draw(&mut display)
+        .unwrap();
+
+    Text::with_text_style("HEXADECK", bb.anchor_point(AnchorPoint::BottomCenter), text_style, center_aligned)
+        .draw(&mut display)
+        .unwrap();
+
+    keypad
 }
 
 /// Get an Instant representing "now."
