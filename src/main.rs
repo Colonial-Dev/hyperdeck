@@ -4,57 +4,58 @@
 mod display;
 mod keypad;
 mod usb;
+mod utils;
 
-use display_interface_spi::SPIInterface;
-
-use embedded_hal::digital::v2::OutputPin;
+use cortex_m::delay::Delay;
 use embedded_hal::spi::{MODE_0, MODE_3};
 use fugit::RateExtU32;
-
-use rp_pico::hal::gpio::FunctionSpi as SPI;
-use rp_pico::hal::timer::{Instant, Timer};
-use rp_pico::hal::{self, pac, Clock, Spi, I2C};
-use rp_pico::hal::usb::UsbBus;
-
+use hal::rosc::RingOscillator;
+use rp2040_hal::gpio::FunctionSpi as SPI;
+use rp2040_hal::multicore::Multicore;
+use rp2040_hal::pwm::Slices;
+use rp2040_hal::timer::Timer;
+use rp2040_hal::usb::UsbBus;
+use rp2040_hal::{self as hal, pac, Clock, Spi, I2C};
 use usb_device::class_prelude::UsbBusAllocator;
 
-use keypad::Keypad;
+use crate::display::{Display, Command::*};
+use crate::keypad::Keypad;
 
-static mut TIMER: Option<Timer> = None;
-
-type Duration64 = fugit::Duration<u64, 1, 100000>;
-
-/// Custom panic handler. Resets the Pico into BOOTSEL (flashing) mode.
-/// Useful for distinguishing between a hang/deadlock and panic/crash.
-#[inline(never)]
-#[panic_handler]
-fn panic(_: &core::panic::PanicInfo) -> ! {
-    rp2040_hal::rom_data::reset_to_usb_boot(0, 0);
-
-    loop {
-        // The previous line hard resets the controller, so this is unreachable.
-    }
+struct Hardware {
+    display: Display,
+    keypad: Keypad,
+    delay: Delay
 }
 
 #[rp_pico::entry]
 fn main() -> ! {
-    let mut keypad = hardware_init();
-    keypad.set_brightness(0.1);
+    let mut hw = hardware_init();
+
+    hw.display.set_brightness(1.0);
+    hw.display.send_command(Splash);
+    hw.delay.delay_ms(2000);
+
+    hw.keypad.set_brightness(0.1);
+
     loop {
-        for (id, event) in keypad.update() {
+        for (id, event) in hw.keypad.update() {
+            if id == 0 && matches!(event, keypad::KeyEvent::Pressed) {
+                hw.display.send_command(Clear);
+                hw.display.send_command(Splash);
+            }
             if id == 0 && matches!(event, keypad::KeyEvent::Held) {
                 for i in 0..16 {
-                    keypad.keys[i].pressed_color = keypad::Color::new(255, 0, 0);
+                    hw.keypad.keys[i].pressed_color = keypad::Color::new(255, 0, 0);
                 }
             }
             if id == 1 && matches!(event, keypad::KeyEvent::Held) {
                 for i in 0..16 {
-                    keypad.keys[i].pressed_color = keypad::Color::new(0, 255, 0);
+                    hw.keypad.keys[i].pressed_color = keypad::Color::new(0, 255, 0);
                 }
             }
             if id == 2 && matches!(event, keypad::KeyEvent::Held) {
                 for i in 0..16 {
-                    keypad.keys[i].pressed_color = keypad::Color::new(0, 0, 255);
+                    hw.keypad.keys[i].pressed_color = keypad::Color::new(0, 0, 255);
                 }
             }
             if id == 3 && matches!(event, keypad::KeyEvent::Held) {
@@ -65,12 +66,8 @@ fn main() -> ! {
                     modifier: 0b00000101,
                     reserved: 0,
                     leds: 0,
-                    keycodes: [0x17, 0x0, 0x0, 0x0, 0x0, 0x0]
-                }); 
-
-                if matches!(result, Err(usb_device::UsbError::WouldBlock)) {
-                    keypad.keys[0].default_color = keypad::Color::new(0, 255, 0);
-                }
+                    keycodes: [0x17, 0x0, 0x0, 0x0, 0x0, 0x0],
+                });
             }
 
             if matches!(event, keypad::KeyEvent::Released) {
@@ -78,17 +75,18 @@ fn main() -> ! {
                     modifier: 0,
                     reserved: 0,
                     leds: 0,
-                    keycodes: [0x0, 0x0, 0x0, 0x0, 0x0, 0x0]
-                }); 
+                    keycodes: [0x0, 0x0, 0x0, 0x0, 0x0, 0x0],
+                });
             }
         }
     }
 }
 
-fn hardware_init() -> Keypad {
+fn hardware_init() -> Hardware {
     let mut pac = pac::Peripherals::take().unwrap();
+    let core = pac::CorePeripherals::take().unwrap();
 
-    let sio = hal::Sio::new(pac.SIO);
+    let mut sio = hal::Sio::new(pac.SIO);
 
     let pins = rp_pico::Pins::new(
         pac.IO_BANK0,
@@ -111,12 +109,11 @@ fn hardware_init() -> Keypad {
     .ok()
     .unwrap();
 
-    let timer = Timer::new(pac.TIMER, &mut pac.RESETS);
-
     // Safety: we're still in the initialization stage,
     // so there's no race risk.
-    unsafe {
-        TIMER = Some(timer);
+    unsafe { 
+        utils::TIMER = Timer::new(pac.TIMER, &mut pac.RESETS).into();
+        utils::ROSC = RingOscillator::new(pac.ROSC).initialize().into();
     }
 
     let bus_allocator = UsbBusAllocator::new(UsbBus::new(
@@ -126,8 +123,9 @@ fn hardware_init() -> Keypad {
         true,
         &mut pac.RESETS,
     ));
-    
-    usb::usb_init(bus_allocator);
+
+    // Intializes USB bus and HIDs
+    usb::init(bus_allocator);
 
     // I2C for keypad keys
     let i2c = I2C::i2c0(
@@ -153,21 +151,9 @@ fn hardware_init() -> Keypad {
 
     let keypad = Keypad::new(i2c, spi, cs);
 
-    // Display
-    let mut bl = pins.gpio22.into_push_pull_output();
-    let mut rst = pins.gpio28.into_push_pull_output();
-    
-    let dc = pins.gpio16.into_push_pull_output();
-    let cs = pins.gpio21.into_push_pull_output();
-
+    // Setup display SPI
     let _ = pins.gpio26.into_mode::<SPI>();
     let _ = pins.gpio27.into_mode::<SPI>();
-
-    let core = pac::CorePeripherals::take().unwrap();
-    let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
-
-    bl.set_low().unwrap();
-    rst.set_high().unwrap();
 
     let spi = Spi::<_, _, 8>::new(pac.SPI1).init(
         &mut pac.RESETS,
@@ -176,94 +162,37 @@ fn hardware_init() -> Keypad {
         &MODE_3,
     );
 
-    let interface = SPIInterface::new(spi, dc, cs);
+    // Setup delay and multicore for display
+    let mut delay = Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
+    let mut mc = Multicore::new(&mut pac.PSM, &mut pac.PPB, &mut sio.fifo);
 
-    let mut display = mipidsi::Builder::st7789_pico1(interface)
-        .with_display_size(135, 240)
-        .with_orientation(mipidsi::Orientation::Landscape(true))
-        .init(&mut delay, Some(rst))
-        .unwrap();
+    // Setup PWM for display backlight control
+    let pwm_slices = Slices::new(pac.PWM, &mut pac.RESETS);
+    let mut pwm = pwm_slices.pwm3;
 
-    display.clear(embedded_graphics::pixelcolor::Rgb565::BLACK).unwrap();
+    pwm.default_config();
+    pwm.enable();
 
-    const Y_MAX: i32 = 134;
-    const X_MAX: i32 = 239;
+    let mut channel_a = pwm.channel_a;
+    let _ = channel_a.output_to(pins.gpio22);
 
-    const CIRCLE_WIDTH: u32 = 60;
-    const CIRCLE_RADIUS: i32 = 30;
+    // Initialize the display
+    // WARNING: this starts the RP2040's second core!
+    let display = Display::new(
+        pins.gpio16,
+        pins.gpio21,
+        pins.gpio28,
+        channel_a,
+        spi,
+        &mut delay,
+        &mut mc,
+    );
 
-    use embedded_graphics::{
-        geometry::AnchorPoint,
-        mono_font::{ascii::FONT_9X15, MonoTextStyleBuilder},
-        pixelcolor::Rgb565,
-        prelude::{DrawTarget, RgbColor},
-        text::{Alignment, Baseline, Text, TextStyleBuilder},
-    };
-
-    use embedded_graphics::prelude::*;
-    use embedded_graphics::primitives::*;
-
-    let circle_origin_red = Circle::new(
-        Point::new(0 - CIRCLE_RADIUS, 0 - CIRCLE_RADIUS),
-        CIRCLE_WIDTH,
-    )
-    .into_styled(PrimitiveStyle::with_fill(Rgb565::RED));
-
-    let circle_xmax_blue = Circle::new(
-        Point::new(X_MAX - CIRCLE_RADIUS, 0 - CIRCLE_RADIUS),
-        CIRCLE_WIDTH,
-    )
-    .into_styled(PrimitiveStyle::with_fill(Rgb565::BLUE));
-
-    let circle_ymax_green = Circle::new(
-        Point::new(0 - CIRCLE_RADIUS, Y_MAX - CIRCLE_RADIUS),
-        CIRCLE_WIDTH,
-    )
-    .into_styled(PrimitiveStyle::with_fill(Rgb565::GREEN));
-
-    let circle_xmax_ymax_yellow = Circle::new(
-        Point::new(X_MAX - CIRCLE_RADIUS, Y_MAX - CIRCLE_RADIUS),
-        CIRCLE_WIDTH,
-    )
-    .into_styled(PrimitiveStyle::with_fill(Rgb565::YELLOW));
-
-    circle_origin_red.draw(&mut display).unwrap();
-    circle_xmax_blue.draw(&mut display).unwrap();
-    circle_ymax_green.draw(&mut display).unwrap();
-    circle_xmax_ymax_yellow.draw(&mut display).unwrap();
-
-    let center_aligned = TextStyleBuilder::new()
-        .alignment(Alignment::Center)
-        .baseline(Baseline::Middle)
-        .build();
-
-    let bb = display.bounding_box().offset(-20);
-
-    let text_style = MonoTextStyleBuilder::new()
-    .font(&embedded_graphics::mono_font::ascii::FONT_10X20)
-    .text_color(Rgb565::WHITE)
-    .build();
-
-    Text::with_text_style("HEXADECK", bb.anchor_point(AnchorPoint::TopCenter), text_style, center_aligned)
-        .draw(&mut display)
-        .unwrap();
-
-    Text::with_text_style("HEXADECK", bb.anchor_point(AnchorPoint::Center), text_style, center_aligned)
-        .draw(&mut display)
-        .unwrap();
-
-    Text::with_text_style("HEXADECK", bb.anchor_point(AnchorPoint::BottomCenter), text_style, center_aligned)
-        .draw(&mut display)
-        .unwrap();
-
-    keypad
-}
-
-/// Get an Instant representing "now."
-fn now() -> Instant {
-    // Safety: get_counter merely reads from the timer -
-    // nothing is mutated.
-    unsafe {
-        TIMER.as_ref().unwrap().get_counter()
+    Hardware {
+        display,
+        keypad,
+        delay
     }
 }
+
+

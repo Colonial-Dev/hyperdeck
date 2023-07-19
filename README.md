@@ -1,4 +1,4 @@
-# Hexadeck
+# Hyperdeck
 
 Pure Rust firmware for my [Raspberry Pi Pico](https://www.raspberrypi.com/products/raspberry-pi-pico/)-powered macropad, built using Pimoroni's [RGB keypad base](https://shop.pimoroni.com/products/pico-rgb-keypad-base) and [display pack](https://shop.pimoroni.com/products/pico-display-pack).
 

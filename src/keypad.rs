@@ -2,17 +2,15 @@ use core::convert::Infallible;
 
 use embedded_hal::digital::v2::OutputPin;
 use embedded_hal::prelude::*;
-
-use rp_pico::hal::{
-    i2c::Error,
-    gpio::{bank0::*, FunctionI2C, Output, Pin, PushPull},
-    spi::Enabled,
-    timer::Instant,
-};
+use rp_pico::hal::gpio::bank0::*;
+use rp_pico::hal::gpio::{FunctionI2C, Output, Pin, PushPull};
+use rp_pico::hal::i2c::Error;
+use rp_pico::hal::spi::Enabled;
+use rp_pico::hal::timer::Instant;
 use rp_pico::hal::{Spi, I2C};
 use rp_pico::pac::{I2C0, SPI0};
 
-use super::{Duration64, now};
+use crate::utils::{now, Duration64};
 
 type KeyI2c = I2C<I2C0, (Pin<Gpio4, FunctionI2C>, Pin<Gpio5, FunctionI2C>)>;
 type LedSpi = Spi<Enabled, SPI0, 8>;
@@ -37,7 +35,7 @@ impl Keypad {
     pub fn new(i2c: KeyI2c, spi: LedSpi, cs: CS) -> Self {
         Self {
             keys: core::array::from_fn(|_| Key::new()),
-            brightness: u8::MAX,
+            brightness: 0,
             i2c,
             spi,
             cs,
@@ -60,9 +58,12 @@ impl Keypad {
         }
     }
 
+    /// Sets the brightness of the keypad LEDs.
+    /// 
+    /// Values lower than 0.0 or higher than 1.0 will be clamped to within that range.
     pub fn set_brightness(&mut self, brightness: f32) {
         let brightness = brightness.clamp(0.0, 1.0);
-        // Map a percentage value (between 0.0 and 1.0) to a u8 between 224 and 255 
+        // Map a percentage value (between 0.0 and 1.0) to a u8 between 224 and 255
         // (the brightness range accepted by the keypad LED protocol)
         self.brightness = 0b11100000 | (brightness * 0b11111 as f32) as u8;
     }
@@ -96,7 +97,7 @@ impl Keypad {
         Ok(())
     }
 
-    fn update_state(&mut self) -> Result<impl Iterator<Item =(u8, KeyEvent)>, Error> {
+    fn update_state(&mut self) -> Result<impl Iterator<Item = (u8, KeyEvent)>, Error> {
         let mut buffer = [0_u8; 2];
 
         // Write zero constant to I2C bus
@@ -122,7 +123,7 @@ impl Keypad {
             #[allow(clippy::match_like_matches_macro)]
             let pressed = match state & (1 << i) {
                 0 => false,
-                _ => true
+                _ => true,
             };
 
             events[i] = self.keys[i].update(pressed);
@@ -131,10 +132,7 @@ impl Keypad {
         Ok(events
             .into_iter()
             .enumerate()
-            .filter_map(|(i, event)| {
-                event.map(|e| (i as u8, e))
-            })
-        )
+            .filter_map(|(i, event)| event.map(|e| (i as u8, e))))
     }
 }
 
@@ -157,7 +155,7 @@ impl Key {
             pressed_color: Color::new(0, 255, 0),
             last_pressed: now(),
             pressed: false,
-            held: false
+            held: false,
         }
     }
 
@@ -168,22 +166,22 @@ impl Key {
             self.pressed = true;
 
             Some(KeyEvent::Pressed)
-        } 
+        }
         // Old press (check to trigger hold event)
         else if (pressed && self.pressed) && (now() - self.last_pressed) >= Self::HOLD_TIME {
             self.held = true;
 
             Some(KeyEvent::Held)
-        } 
+        }
         // Released
         else if !pressed && self.pressed {
             self.pressed = false;
             self.held = false;
-            
+
             Some(KeyEvent::Released)
-        } 
+        }
         // No event of note
-        else {            
+        else {
             None
         }
     }
@@ -200,7 +198,7 @@ impl Key {
 pub enum KeyEvent {
     Pressed,
     Held,
-    Released
+    Released,
 }
 
 #[derive(Clone, Copy, Default)]

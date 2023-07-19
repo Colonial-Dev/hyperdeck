@@ -1,18 +1,10 @@
 use rp_pico::hal::usb::UsbBus;
 use rp_pico::pac::{self, interrupt};
-
-use usb_device::{
-    prelude::*,
-    class_prelude::*,
-    UsbError
-};
-
-use usbd_hid::descriptor::{
-    generator_prelude::*,
-    KeyboardReport,
-    MediaKeyboardReport,
-    SystemControlReport,
-};
+use usb_device::class_prelude::*;
+use usb_device::prelude::*;
+use usb_device::UsbError;
+use usbd_hid::descriptor::generator_prelude::*;
+use usbd_hid::descriptor::{KeyboardReport, MediaKeyboardReport, SystemControlReport};
 use usbd_hid::hid_class::HIDClass;
 
 type Device = UsbDevice<'static, UsbBus>;
@@ -26,9 +18,9 @@ static mut HID_KEYBOARD: Option<Hid> = None;
 static mut HID_SYSCTL: Option<Hid> = None;
 static mut HID_MEDIA: Option<Hid> = None;
 
-pub fn usb_init(bus_allocator: Bus) {
+pub fn init(bus_allocator: Bus) {
     // Safety: interrupts haven't been started yet.
-    let bus_ref = unsafe { 
+    let bus_ref = unsafe {
         USB_BUS = Some(bus_allocator);
         // Safety: taking a mutable reference to the Bus is now instant UB.
         // DON'T DO IT.
@@ -47,7 +39,7 @@ pub fn usb_init(bus_allocator: Bus) {
 
     let usb_device = UsbDeviceBuilder::new(bus_ref, UsbVidPid(0x0011, 0x0))
         .manufacturer("Colonial")
-        .product("Hexapad")
+        .product("Hyperdeck")
         .serial_number("0")
         .device_class(0)
         .build();
@@ -63,10 +55,18 @@ pub fn usb_init(bus_allocator: Bus) {
 }
 
 pub fn push_keyboard(report: KeyboardReport) -> Result<usize, UsbError> {
-    critical_section::with(|_| unsafe {
-        HID_KEYBOARD.as_mut().map(|hid| hid.push_input(&report))
-    })
-    .unwrap()
+    critical_section::with(|_| unsafe { HID_KEYBOARD.as_mut().map(|hid| hid.push_input(&report)) })
+        .unwrap()
+}
+
+pub fn push_sysctl(report: SystemControlReport) -> Result<usize, UsbError> {
+    critical_section::with(|_| unsafe { HID_SYSCTL.as_mut().map(|hid| hid.push_input(&report)) })
+        .unwrap()
+}
+
+pub fn push_media(report: MediaKeyboardReport) -> Result<usize, UsbError> {
+    critical_section::with(|_| unsafe { HID_MEDIA.as_mut().map(|hid| hid.push_input(&report)) })
+        .unwrap()
 }
 
 /// Whenever the USB hardware generates an interrupt request, this function is called.

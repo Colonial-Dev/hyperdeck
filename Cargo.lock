@@ -165,6 +165,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "embedded-graphics-framebuf"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22354420f68727fa24d1e2741dae1e9a041065e80fb63b35a8d19c647a85be76"
+dependencies = [
+ "embedded-dma",
+ "embedded-graphics",
+]
+
+[[package]]
 name = "embedded-hal"
 version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -227,20 +237,23 @@ dependencies = [
 ]
 
 [[package]]
-name = "hexadeck"
+name = "hyperdeck"
 version = "0.1.0"
 dependencies = [
  "cortex-m",
  "cortex-m-rt",
  "critical-section",
+ "display-interface",
  "display-interface-spi",
  "embedded-graphics",
+ "embedded-graphics-framebuf",
  "embedded-hal",
  "fugit",
  "heapless",
  "mipidsi",
  "rp-pico",
  "rp2040-hal",
+ "u8g2-fonts",
  "usb-device",
  "usbd-hid",
 ]
@@ -522,6 +535,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "u8g2-fonts"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c53bd76579dcab4b69ffe77c895b8dffa4a9b3273c0a5105afc4d3768a5064ed"
+dependencies = [
+ "embedded-graphics",
+ "embedded-graphics-core",
 ]
 
 [[package]]
