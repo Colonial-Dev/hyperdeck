@@ -1,10 +1,10 @@
 #![allow(clippy::upper_case_acronyms)]
-#![allow(clippy::option_map_unit_fn)]
 
 mod driver;
 
 use cortex_m::delay::Delay;
 use display_interface_spi::SPIInterface;
+use embedded_graphics::pixelcolor::Rgb565;
 use embedded_hal::PwmPin;
 use heapless::mpmc::Q16;
 use rp2040_hal::gpio::bank0::*;
@@ -29,14 +29,14 @@ type RST = Pin<Gpio28, Disabled<PullDown>>;
 type SPI = Spi<Enabled, SPI1, 8>;
 
 pub enum Command {
-    Clear,
     Splash,
     Home {
         layer_id: u8,
         layer_name: &'static str,
+        layer_color: Rgb565
     }, 
     Selector {
-
+        
     },
     Settings {
 

@@ -10,7 +10,7 @@ use rp_pico::hal::timer::Instant;
 use rp_pico::hal::{Spi, I2C};
 use rp_pico::pac::{I2C0, SPI0};
 
-use crate::utils::{now, Duration64};
+use crate::utils::{now, Duration};
 
 type KeyI2c = I2C<I2C0, (Pin<Gpio4, FunctionI2C>, Pin<Gpio5, FunctionI2C>)>;
 type LedSpi = Spi<Enabled, SPI0, 8>;
@@ -145,7 +145,7 @@ pub struct Key {
 }
 
 impl Key {
-    const HOLD_TIME: Duration64 = Duration64::millis(750);
+    const HOLD_TIME: Duration = Duration::millis(750);
 }
 
 impl Key {

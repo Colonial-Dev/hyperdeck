@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+mod config;
 mod display;
 mod keypad;
 mod usb;
@@ -40,7 +41,6 @@ fn main() -> ! {
     loop {
         for (id, event) in hw.keypad.update() {
             if id == 0 && matches!(event, keypad::KeyEvent::Pressed) {
-                hw.display.send_command(Clear);
                 hw.display.send_command(Splash);
             }
             if id == 0 && matches!(event, keypad::KeyEvent::Held) {
@@ -62,7 +62,7 @@ fn main() -> ! {
                 rp2040_hal::rom_data::reset_to_usb_boot(0, 0);
             }
             if id == 15 && matches!(event, keypad::KeyEvent::Pressed) {
-                let result = usb::push_keyboard(usbd_hid::descriptor::KeyboardReport {
+                let _ = usb::push_keyboard(usbd_hid::descriptor::KeyboardReport {
                     modifier: 0b00000101,
                     reserved: 0,
                     leds: 0,
@@ -187,6 +187,8 @@ fn hardware_init() -> Hardware {
         &mut delay,
         &mut mc,
     );
+
+    //usb::config_mode();
 
     Hardware {
         display,

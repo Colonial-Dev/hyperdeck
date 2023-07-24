@@ -4,7 +4,7 @@ use rp2040_hal::rosc::{RingOscillator, Enabled};
 pub static mut TIMER: Option<Timer> = None;
 pub static mut ROSC: Option<RingOscillator<Enabled>> = None;
 
-pub type Duration64 = fugit::Duration<u64, 1, 100000>;
+pub type Duration = fugit::Duration<u32, 1, 100000>;
 
 /// Custom panic handler. Resets the Pico into BOOTSEL (flashing) mode.
 /// Useful for distinguishing between a hang/deadlock and panic/crash.
@@ -22,6 +22,18 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
 pub fn now() -> Instant {
     // Safety: get_counter is a read-only operation.
     unsafe { TIMER.as_ref().unwrap().get_counter() }
+}
+
+/// Simple busy-waiting implementation using [`now()`].
+pub fn wait(duration_ms: u32) {
+    let length = Duration::millis(duration_ms);
+    let start = now();
+
+    loop {
+        if now() - start >= length {
+            return;
+        }
+    }
 }
 
 /// Generates a random u32 in the range `[min, max]` using the RP2040's ring oscillator.

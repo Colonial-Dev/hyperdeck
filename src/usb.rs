@@ -4,37 +4,34 @@ use usb_device::class_prelude::*;
 use usb_device::prelude::*;
 use usb_device::UsbError;
 use usbd_hid::descriptor::generator_prelude::*;
-use usbd_hid::descriptor::{KeyboardReport, MediaKeyboardReport, SystemControlReport};
+use usbd_hid::descriptor::KeyboardReport;
 use usbd_hid::hid_class::HIDClass;
+use usbd_serial::SerialPort;
 
 type Device = UsbDevice<'static, UsbBus>;
 type Bus = UsbBusAllocator<UsbBus>;
 type Hid = HIDClass<'static, UsbBus>;
+type Serial = SerialPort<'static, UsbBus>;
 
 static mut USB_DEVICE: Option<Device> = None;
 static mut USB_BUS: Option<Bus> = None;
 
-static mut HID_KEYBOARD: Option<Hid> = None;
-static mut HID_SYSCTL: Option<Hid> = None;
-static mut HID_MEDIA: Option<Hid> = None;
+static mut SERIAL: Option<Serial> = None;
+static mut HID: Option<Hid> = None;
 
 pub fn init(bus_allocator: Bus) {
-    // Safety: interrupts haven't been started yet.
     let bus_ref = unsafe {
+        // Safety: interrupts haven't been started yet.
         USB_BUS = Some(bus_allocator);
-        // Safety: taking a mutable reference to the Bus is now instant UB.
-        // DON'T DO IT.
         USB_BUS.as_ref().unwrap()
     };
 
-    let hid_keyboard = HIDClass::new(bus_ref, KeyboardReport::desc(), 60);
-    let hid_sysctl = HIDClass::new(bus_ref, SystemControlReport::desc(), 60);
-    let hid_media = HIDClass::new(bus_ref, MediaKeyboardReport::desc(), 60);
+    let hid = HIDClass::new(bus_ref, KeyboardReport::desc(), 60);
+    let serial = SerialPort::new(bus_ref);
 
     unsafe {
-        HID_KEYBOARD = Some(hid_keyboard);
-        HID_SYSCTL = Some(hid_sysctl);
-        HID_MEDIA = Some(hid_media);
+        HID = Some(hid);
+        SERIAL = Some(serial);
     }
 
     let usb_device = UsbDeviceBuilder::new(bus_ref, UsbVidPid(0x0011, 0x0))
@@ -54,18 +51,40 @@ pub fn init(bus_allocator: Bus) {
     }
 }
 
+pub fn config_mode() {
+    critical_section::with(|_| unsafe {
+        // Safety: taking a mutable reference to these is okay within a critical section.
+        let usb_dev = USB_DEVICE.as_mut().unwrap();
+        let serial = SERIAL.as_mut().unwrap();
+
+        loop {
+            if !usb_dev.poll(&mut [serial]) {
+                continue;
+            }
+
+            let mut magic_buf = [0u8; 5];
+
+            match serial.read(&mut magic_buf[..]) {
+                Ok(count) => {
+                    if magic_buf == [b'H', b'Y', b'P', b'E', b'R'] {
+                        panic!()
+                    }
+                },
+                Err(UsbError::WouldBlock) => {
+
+                },
+                Err(err) => Err(err).unwrap() 
+            }
+        }
+    })
+}
+
+pub fn push_report(report: [u8; 8]) -> Result<usize, UsbError> {
+    todo!()
+}
+
 pub fn push_keyboard(report: KeyboardReport) -> Result<usize, UsbError> {
-    critical_section::with(|_| unsafe { HID_KEYBOARD.as_mut().map(|hid| hid.push_input(&report)) })
-        .unwrap()
-}
-
-pub fn push_sysctl(report: SystemControlReport) -> Result<usize, UsbError> {
-    critical_section::with(|_| unsafe { HID_SYSCTL.as_mut().map(|hid| hid.push_input(&report)) })
-        .unwrap()
-}
-
-pub fn push_media(report: MediaKeyboardReport) -> Result<usize, UsbError> {
-    critical_section::with(|_| unsafe { HID_MEDIA.as_mut().map(|hid| hid.push_input(&report)) })
+    critical_section::with(|_| unsafe { HID.as_mut().map(|hid| hid.push_input(&report)) })
         .unwrap()
 }
 
@@ -73,21 +92,17 @@ pub fn push_media(report: MediaKeyboardReport) -> Result<usize, UsbError> {
 #[allow(non_snake_case)]
 #[interrupt]
 unsafe fn USBCTRL_IRQ() {
-    // Safety: taking a mutable reference to these *should* be okay,
-    // as the interrupt preempts the rest of the program (with the exception
-    // of the display controller on core1, which can't touch these due to privacy rules.)
+    // Safety: taking a mutable reference to these is okay,
+    // as the interrupt preempts the rest of the program.
     let usb_dev = USB_DEVICE.as_mut().unwrap();
 
-    let hid_keyboard = HID_KEYBOARD.as_mut().unwrap();
-    let hid_sysctl = HID_SYSCTL.as_mut().unwrap();
-    let hid_media = HID_MEDIA.as_mut().unwrap();
+    let hid = HID.as_mut().unwrap();
+    let serial = SERIAL.as_mut().unwrap();
 
-    usb_dev.poll(&mut [hid_keyboard, hid_sysctl, hid_media]);
+    usb_dev.poll(&mut [hid, serial]);
 
     // This is needed for reasons only known to the wizards
     // at the USB-IF (it has something to do with caps lock LEDs?)
     let mut throwaway_buf = [0; 64];
-    let _ = hid_keyboard.pull_raw_output(&mut throwaway_buf);
-    let _ = hid_sysctl.pull_raw_output(&mut throwaway_buf);
-    let _ = hid_media.pull_raw_output(&mut throwaway_buf);
+    let _ = hid.pull_raw_output(&mut throwaway_buf);
 }

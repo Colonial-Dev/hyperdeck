@@ -12,10 +12,14 @@ use u8g2_fonts::FontRenderer;
 use u8g2_fonts::types::{FontColor, HorizontalAlignment, VerticalPosition};
 use u8g2_fonts::fonts::u8g2_font_profont29_mf as Profont29;
 
-
 use super::{WIDTH, HEIGHT, SCREEN_SIZE, Command, COMMAND_QUEUE};
 
 use crate::utils::random;
+
+/// Backing array for the frame buffer.
+///
+/// Must be a static, because trying to store this on the second core's stack will inevitably blow it in *spectacular* fashion.
+static mut FRAME_BUFFER_DATA: [Rgb565; SCREEN_SIZE]= [Rgb565::BLACK; SCREEN_SIZE];
 
 type FrameBuffer = FrameBuf<Rgb565, &'static mut [Rgb565; SCREEN_SIZE]>;
 
@@ -23,23 +27,34 @@ pub fn drive<D>(mut display: D) -> !
 where
     D: DrawTarget<Color = Rgb565, Error = DisplayError>,
 {
-    static mut FRAME_BUFFER_DATA: [Rgb565; SCREEN_SIZE]= [Rgb565::BLACK; SCREEN_SIZE];
-    let mut fbuf = FrameBuf::new(unsafe { &mut FRAME_BUFFER_DATA }, WIDTH as usize, HEIGHT as usize);
-    let area = Rectangle::new(Point::new(0, 0), fbuf.size());
+
+    let mut fbuf = FrameBuf::new(
+        unsafe { &mut FRAME_BUFFER_DATA },
+        WIDTH as usize,
+        HEIGHT as usize
+    );
+    
+    let area = Rectangle::new(
+        Point::default(),
+        fbuf.size()
+    );
 
     loop {
         use Command::*;
 
-        COMMAND_QUEUE.dequeue().map(|command| match command {
-            Clear => fbuf.clear(Rgb565::BLACK).unwrap(),
-            Splash => splash(&mut fbuf),
-            _ => unimplemented!()
-        });
+        if let Some(command) = COMMAND_QUEUE.dequeue() {
+            match command {
+                Splash => splash(&mut fbuf),
+                _ => unimplemented!()
+            };
 
-        display.fill_contiguous(
-            &area, 
-            unsafe { FRAME_BUFFER_DATA.iter().copied() }
-        ).unwrap();
+            display.fill_contiguous(
+                &area, 
+                unsafe { FRAME_BUFFER_DATA.iter().copied() }
+            ).unwrap();
+
+            fbuf.clear(Rgb565::BLACK).unwrap();
+        }
     }
 }
 
@@ -65,8 +80,8 @@ fn splash(fbuf: &mut FrameBuffer)
         _ => unreachable!()
     };
 
-    let bb = fbuf.bounding_box().offset(-20);
-
+    let bounds = fbuf.bounding_box().offset(-20);
+    
     let font_renderer = FontRenderer::new::<Profont29>();
 
     font_renderer.render_aligned(
@@ -91,7 +106,7 @@ fn splash(fbuf: &mut FrameBuffer)
 
     font_renderer.render_aligned(
         "HYPERDECK",
-        bb.anchor_point(AnchorPoint::Center),
+        bounds.anchor_point(AnchorPoint::Center),
         VerticalPosition::Center,
         HorizontalAlignment::Center,
         FontColor::Transparent(Rgb565::WHITE),
