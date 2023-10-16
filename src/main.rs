@@ -21,44 +21,41 @@ use usb_device::class_prelude::UsbBusAllocator;
 
 use crate::display::{Display, Command::*};
 use crate::keypad::Keypad;
-
-struct Hardware {
-    display: Display,
-    keypad: Keypad,
-    delay: Delay
-}
+use crate::utils::wait;
 
 #[rp_pico::entry]
 fn main() -> ! {
-    let mut hw = hardware_init();
+    // let mut config = Config::load();
+    let (mut display, mut keypad) = hardware_init();
+    
+    display.set_brightness(1.0);
+    display.send_command(Splash);
+    wait(1000);
 
-    hw.display.set_brightness(1.0);
-    hw.display.send_command(Splash);
-    hw.delay.delay_ms(2000);
-
-    hw.keypad.set_brightness(0.1);
+    keypad.set_brightness(0.1);
 
     loop {
-        for (id, event) in hw.keypad.update() {
+        for (id, event) in keypad.update() {
             if id == 0 && matches!(event, keypad::KeyEvent::Pressed) {
-                hw.display.send_command(Splash);
+                display.send_command(Splash);
             }
             if id == 0 && matches!(event, keypad::KeyEvent::Held) {
                 for i in 0..16 {
-                    hw.keypad.keys[i].pressed_color = keypad::Color::new(255, 0, 0);
+                    keypad.keys[i].pressed_color = keypad::Color::new(255, 0, 0);
                 }
             }
             if id == 1 && matches!(event, keypad::KeyEvent::Held) {
                 for i in 0..16 {
-                    hw.keypad.keys[i].pressed_color = keypad::Color::new(0, 255, 0);
+                    keypad.keys[i].pressed_color = keypad::Color::new(0, 255, 0);
                 }
             }
             if id == 2 && matches!(event, keypad::KeyEvent::Held) {
                 for i in 0..16 {
-                    hw.keypad.keys[i].pressed_color = keypad::Color::new(0, 0, 255);
+                    keypad.keys[i].pressed_color = keypad::Color::new(0, 0, 255);
                 }
             }
             if id == 3 && matches!(event, keypad::KeyEvent::Held) {
+                panic!("l bozo");
                 rp2040_hal::rom_data::reset_to_usb_boot(0, 0);
             }
             if id == 15 && matches!(event, keypad::KeyEvent::Pressed) {
@@ -82,7 +79,7 @@ fn main() -> ! {
     }
 }
 
-fn hardware_init() -> Hardware {
+fn hardware_init() -> (Display, Keypad) {
     let mut pac = pac::Peripherals::take().unwrap();
     let core = pac::CorePeripherals::take().unwrap();
 
@@ -188,13 +185,7 @@ fn hardware_init() -> Hardware {
         &mut mc,
     );
 
-    //usb::config_mode();
-
-    Hardware {
-        display,
-        keypad,
-        delay
-    }
+    (display, keypad)
 }
 
 

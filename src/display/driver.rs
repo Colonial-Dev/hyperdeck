@@ -1,3 +1,5 @@
+use heapless::String;
+
 use embedded_graphics::geometry::AnchorPoint;
 use embedded_graphics::prelude::*;
 use embedded_graphics::primitives::*;
@@ -11,25 +13,22 @@ use embedded_graphics_framebuf::FrameBuf;
 use u8g2_fonts::FontRenderer;
 use u8g2_fonts::types::{FontColor, HorizontalAlignment, VerticalPosition};
 use u8g2_fonts::fonts::u8g2_font_profont29_mf as Profont29;
+use u8g2_fonts::fonts::u8g2_font_profont15_mf as Profont15;
 
 use super::{WIDTH, HEIGHT, SCREEN_SIZE, Command, COMMAND_QUEUE};
 
 use crate::utils::random;
 
-/// Backing array for the frame buffer.
-///
-/// Must be a static, because trying to store this on the second core's stack will inevitably blow it in *spectacular* fashion.
-static mut FRAME_BUFFER_DATA: [Rgb565; SCREEN_SIZE]= [Rgb565::BLACK; SCREEN_SIZE];
-
-type FrameBuffer = FrameBuf<Rgb565, &'static mut [Rgb565; SCREEN_SIZE]>;
+type FrameBuffer<'a> = FrameBuf<Rgb565, &'a mut [Rgb565; SCREEN_SIZE]>;
 
 pub fn drive<D>(mut display: D) -> !
 where
     D: DrawTarget<Color = Rgb565, Error = DisplayError>,
 {
+    let mut data = [Rgb565::BLACK; SCREEN_SIZE];
 
     let mut fbuf = FrameBuf::new(
-        unsafe { &mut FRAME_BUFFER_DATA },
+        &mut data,
         WIDTH as usize,
         HEIGHT as usize
     );
@@ -45,12 +44,13 @@ where
         if let Some(command) = COMMAND_QUEUE.dequeue() {
             match command {
                 Splash => splash(&mut fbuf),
+                Panic { message } => panic(&mut fbuf, message),
                 _ => unimplemented!()
             };
 
             display.fill_contiguous(
                 &area, 
-                unsafe { FRAME_BUFFER_DATA.iter().copied() }
+                fbuf.data.iter().copied()
             ).unwrap();
 
             fbuf.clear(Rgb565::BLACK).unwrap();
@@ -107,6 +107,46 @@ fn splash(fbuf: &mut FrameBuffer)
     font_renderer.render_aligned(
         "HYPERDECK",
         bounds.anchor_point(AnchorPoint::Center),
+        VerticalPosition::Center,
+        HorizontalAlignment::Center,
+        FontColor::Transparent(Rgb565::WHITE),
+        fbuf
+    )
+    .unwrap();
+}
+
+fn panic(fbuf: &mut FrameBuffer, message: String<64>) {
+    fbuf.clear(Rgb565::CSS_DARK_RED).unwrap();
+
+    let bounds = fbuf.bounding_box().offset(-20);
+    
+    let lg_font_renderer = FontRenderer::new::<Profont29>();
+    let sm_font_renderer = FontRenderer::new::<Profont15>();
+
+
+    lg_font_renderer.render_aligned(
+        "SYSTEM PANIC",
+        bounds.anchor_point(AnchorPoint::TopCenter),
+        VerticalPosition::Center,
+        HorizontalAlignment::Center,
+        FontColor::Transparent(Rgb565::WHITE),
+        fbuf
+    )
+    .unwrap();
+
+    sm_font_renderer.render_aligned(
+        "Hyperdeck firmware halted. \n Power cycle to reset.",
+        bounds.anchor_point(AnchorPoint::Center),
+        VerticalPosition::Center,
+        HorizontalAlignment::Center,
+        FontColor::Transparent(Rgb565::WHITE),
+        fbuf
+    )
+    .unwrap();
+
+    sm_font_renderer.render_aligned(
+        message.as_str(),
+        bounds.anchor_point(AnchorPoint::BottomCenter),
         VerticalPosition::Center,
         HorizontalAlignment::Center,
         FontColor::Transparent(Rgb565::WHITE),

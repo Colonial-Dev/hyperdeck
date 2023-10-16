@@ -52,13 +52,19 @@ pub fn init(bus_allocator: Bus) {
 }
 
 pub fn config_mode() {
+    let mut found = false;
+
     critical_section::with(|_| unsafe {
         // Safety: taking a mutable reference to these is okay within a critical section.
         let usb_dev = USB_DEVICE.as_mut().unwrap();
+        let hid = HID.as_mut().unwrap();
         let serial = SERIAL.as_mut().unwrap();
 
+        let mut throwaway_buf = [0; 64];
+
         loop {
-            if !usb_dev.poll(&mut [serial]) {
+            if !usb_dev.poll(&mut [hid, serial]) {
+                let _ = hid.pull_raw_output(&mut throwaway_buf);
                 continue;
             }
 
@@ -67,7 +73,8 @@ pub fn config_mode() {
             match serial.read(&mut magic_buf[..]) {
                 Ok(count) => {
                     if magic_buf == [b'H', b'Y', b'P', b'E', b'R'] {
-                        panic!()
+                        found = true;
+                        return;
                     }
                 },
                 Err(UsbError::WouldBlock) => {
@@ -76,7 +83,11 @@ pub fn config_mode() {
                 Err(err) => Err(err).unwrap() 
             }
         }
-    })
+    });
+
+    if found {
+        panic!("Magic recevied :)")
+    }
 }
 
 pub fn push_report(report: [u8; 8]) -> Result<usize, UsbError> {
@@ -105,4 +116,5 @@ unsafe fn USBCTRL_IRQ() {
     // at the USB-IF (it has something to do with caps lock LEDs?)
     let mut throwaway_buf = [0; 64];
     let _ = hid.pull_raw_output(&mut throwaway_buf);
+    let _ = serial.read(&mut throwaway_buf);
 }

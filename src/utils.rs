@@ -1,6 +1,7 @@
 use rp2040_hal::timer::{Timer, Instant};
 use rp2040_hal::rosc::{RingOscillator, Enabled};
 
+
 pub static mut TIMER: Option<Timer> = None;
 pub static mut ROSC: Option<RingOscillator<Enabled>> = None;
 
@@ -10,7 +11,39 @@ pub type Duration = fugit::Duration<u32, 1, 100000>;
 /// Useful for distinguishing between a hang/deadlock and panic/crash.
 #[inline(never)]
 #[panic_handler]
-fn panic(_: &core::panic::PanicInfo) -> ! {
+fn panic(info: &core::panic::PanicInfo) -> ! {
+    use core::fmt::Write;
+    use heapless::String;
+    use crate::display::Display;
+
+    let mut message: String<64> = String::new();
+    let mut payload: String<32> = String::new();
+
+    let _ = write!(&mut payload, "{info}");
+
+    let _ = write!(
+        &mut message, 
+        "Location: {}\nMessage: {}",
+        info
+            .location()
+            .unwrap(),
+        payload
+            .trim_start_matches("panicked at '")
+            .split('\'')
+            .next()
+            .map(|str| match str.is_empty() {
+                true => "N/A",
+                false => str
+            })
+            .unwrap()
+    );
+
+    Display::send_panic(message);
+
+    // Busy-wait to give the screen a chance to render.
+    wait(1000);
+
+    // Reboot into BOOTSEL mode
     rp2040_hal::rom_data::reset_to_usb_boot(0, 0);
 
     loop {

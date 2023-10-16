@@ -6,7 +6,7 @@ use cortex_m::delay::Delay;
 use display_interface_spi::SPIInterface;
 use embedded_graphics::pixelcolor::Rgb565;
 use embedded_hal::PwmPin;
-use heapless::mpmc::Q16;
+use heapless::{String, mpmc::Q16};
 use rp2040_hal::gpio::bank0::*;
 use rp2040_hal::gpio::{Disabled, Pin, PullDown};
 use rp2040_hal::multicore::{Multicore, Stack};
@@ -18,7 +18,11 @@ const WIDTH: u16 = 240;
 const HEIGHT: u16 = 135;
 const SCREEN_SIZE: usize = (WIDTH * HEIGHT) as usize;
 
-static mut CORE1_STACK: Stack<4096> = Stack::new();
+/// Stack for core 1.
+/// 
+/// 64_800 bytes for the frame buffer, plus an extra 25%.
+static mut CORE1_STACK: Stack<20250> = Stack::new();
+
 static COMMAND_QUEUE: Q16<Command> = Q16::new();
 
 type DC = Pin<Gpio16, Disabled<PullDown>>;
@@ -32,7 +36,7 @@ pub enum Command {
     Splash,
     Home {
         layer_id: u8,
-        layer_name: &'static str,
+        layer_name: String<16>,
         layer_color: Rgb565
     }, 
     Selector {
@@ -41,6 +45,9 @@ pub enum Command {
     Settings {
 
     },
+    Panic {
+        message: String<64>
+    }
 }
 
 pub struct Display {
@@ -70,8 +77,7 @@ impl Display {
         // Create display
         let display = mipidsi::Builder::st7789_pico1(interface)
             .with_display_size(WIDTH, HEIGHT)
-            // We're using the display upside-down (so the jumper pins don't get in the way as much)
-            .with_orientation(mipidsi::Orientation::LandscapeInverted(true))
+            .with_orientation(mipidsi::Orientation::Landscape(true))
             .init(delay, Some(rst))
             .unwrap();
 
@@ -101,6 +107,11 @@ impl Display {
     /// any excess will be silently dropped.
     pub fn send_command(&self, command: Command) {
         let _ = COMMAND_QUEUE.enqueue(command);
+    }
+
+    /// Send a panic message to the display command queue, without needing a reference to the display.
+    pub fn send_panic(message: String<64>) {
+        let _ = COMMAND_QUEUE.enqueue(Command::Panic { message });
     }
 }
 
